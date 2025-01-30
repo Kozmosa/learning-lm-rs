@@ -1,3 +1,4 @@
+use std::arch::x86_64::_xsavec64;
 use crate::tensor::Tensor;
 
 // get (row) vectors from a 2D table given a list of indices
@@ -69,9 +70,118 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
         }
     }
 }
+// tensor mul for the same shape
+pub fn hadamard_mul_tensor(x: & Tensor<f32>, y: & Tensor<f32>) -> Tensor<f32> {
+    // result = x * y
+    // 获取当前张量和另一个张量的数据
+    let other_data = y.data();
+
+    // 创建一个可变的引用，用于修改当前张量的数
+    let len = x.size();
+    let mut self_data = x.data();
+
+    // 逐元素进行乘法操作
+    let mut result: Tensor<f32> = x.clone();
+    let mut result_data_mut = unsafe{result.data_mut()};
+
+    for i in 0..len {
+        result_data_mut[i] = self_data[i] * other_data[i];
+    }
+
+    result
+}
+
+pub fn hadamard_mul_vec(x: &Vec<f32>, y: &Vec<f32>) -> Vec<f32> {
+    // another implementation for the hadamard multiple
+    // result = x * y
+    if x.len() != y.len() {
+        panic!("x and y must be same length");
+    }
+
+    let mut result = Vec::with_capacity(x.len());
+
+    for i in 0..x.len() {
+        result.push(x[i] * y[i]);
+    }
+
+    result
+}
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    // rms normalization implementations
+    // 均方根归一化是针最后维度的每一个向量进行运算的
+    let all_dim_of_y = y.all_last_dim_vectors();
+    // 先计算分母
+    let all_dim_of_x = x.all_last_dim_vectors();
+    let mut result_data: Vec<Vec<f32>> = Vec::with_capacity(all_dim_of_y.len());
+
+    // 所有结果的元素组
+    let mut result_elements: Vec<f32> = Vec::with_capacity(y.size());
+    for (index, x_i) in all_dim_of_x.iter().enumerate() {
+        // 先计算分母
+        let x_i_len = x_i.len() as f64;
+        let mut down: f64 = 0.0;
+        for dim_element in x_i {
+            down += f64::from(dim_element * dim_element);
+        }
+        // 除以n
+        down = down / x_i_len;
+        // 加上epsilon
+        down = down + f64::from(epsilon);
+        // 开根号
+        down = down.sqrt();
+
+        // 再计算分子，进行向量逐项乘法
+        let down_f32: f32 = down as f32;
+        let mut up: Tensor<f32> = hadamard_mul_tensor(w, x);
+        let all_dim_of_up = up.all_last_dim_vectors();
+        for mut up_i in all_dim_of_up {
+            for mut up_element in up_i {
+                up_element = up_element / down_f32;
+                result_elements.push(up_element);
+            }
+        }
+    }
+
+    // 逐个替换y中元素的值
+    // 重构了
+    // unsafe {
+    //     let y_data_mut = y.data_mut();
+    //     let mut result_data_vec:Vec<f32> = Vec::with_capacity(y.size());
+    //     for r_i in result_data {
+    //         for r_ij in r_i {
+    //             result_data_vec.push(r_ij);
+    //         }
+    //     }
+    //     for i in 0..y.size() {
+    //         y.replace_unchecked(i, result_data_vec[i]);
+    //     }
+    // }
+    unsafe {
+        let y_data_mut = y.data_mut();
+        for i in 0..y.size() {
+            y.replace_unchecked(i, result_elements[i]);
+        }
+    }
+}
+
+pub fn sigmoid(x: f32) -> f32 {
+    // Sigmoid operator implementations
+    1.0 / (1.0 + (-x).exp())
+}
+pub fn silu(x: &Tensor<f32>) -> Tensor<f32> {
+    // SiLU operator implementations
+    let mut result_data:Vec<f32> = Vec::with_capacity(x.size() as usize);
+
+    for &value in x.data().iter() {
+        let x: f32 = value.into();
+        let sigmoid_value = sigmoid(x);
+        let silu_value: f32 = sigmoid_value * x;
+        result_data.push(silu_value);
+    }
+
+    let silu_result: Tensor<f32> = Tensor::new(result_data, x.shape());
+    return silu_result;
 }
 
 // y = silu(x) * y
@@ -83,7 +193,21 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
     // let _y = unsafe { y.data_mut() };
     // let _x = x.data();
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    let len = y.size();
+    assert!(len == x.size());
+
+    let mut silu_result: Tensor<f32> = silu(x);
+    // implementation for swiglu mul assign
+    // 获取当前张量和另一个张量的数据
+    let other_data = silu_result.data();
+
+    // 创建一个可变的引用，用于修改当前张量的数据
+    let mut self_data_mut = unsafe { y.data_mut() };
+
+    // 逐元素进行乘法操作
+    for i in 0..len {
+        self_data_mut[i] = self_data_mut[i] * other_data[i];
+    }
 }
 
 // C = beta * C + alpha * A @ B^T
