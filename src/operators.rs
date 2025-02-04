@@ -109,59 +109,33 @@ pub fn hadamard_mul_vec(x: &Vec<f32>, y: &Vec<f32>) -> Vec<f32> {
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
     // rms normalization implementations
-    // 均方根归一化是针最后维度的每一个向量进行运算的
-    let all_dim_of_y = y.all_last_dim_vectors();
-    // 先计算分母
+    // by deepseek r1
     let all_dim_of_x = x.all_last_dim_vectors();
-    let mut result_data: Vec<Vec<f32>> = Vec::with_capacity(all_dim_of_y.len());
-
-    // 所有结果的元素组
+    let w_data = w.data();
     let mut result_elements: Vec<f32> = Vec::with_capacity(y.size());
-    for (index, x_i) in all_dim_of_x.iter().enumerate() {
-        // 先计算分母
-        let x_i_len = x_i.len() as f64;
-        let mut down: f64 = 0.0;
-        for dim_element in x_i {
-            down += f64::from(dim_element * dim_element);
-        }
-        // 除以n
-        down = down / x_i_len;
-        // 加上epsilon
-        down = down + f64::from(epsilon);
-        // 开根号
-        down = down.sqrt();
 
-        // 再计算分子，进行向量逐项乘法
-        let down_f32: f32 = down as f32;
-        let mut up: Tensor<f32> = hadamard_mul_tensor(w, x);
-        let all_dim_of_up = up.all_last_dim_vectors();
-        for mut up_i in all_dim_of_up {
-            for mut up_element in up_i {
-                up_element = up_element / down_f32;
-                result_elements.push(up_element);
-            }
-        }
+    for x_i in all_dim_of_x {
+        // 计算分母
+        let x_i_len = x_i.len() as f64;
+        let mut down: f64 = x_i.iter()
+            .map(|v| f64::from(*v).powi(2))
+            .sum::<f64>() / x_i_len;
+        down = (down + f64::from(epsilon)).sqrt();
+        let down_f32 = down as f32;
+
+        // 逐元素相乘并归一化
+        let up_i: Vec<f32> = x_i.iter()
+            .zip(w_data.iter())
+            .map(|(x_val, w_val)| x_val * w_val / down_f32)
+            .collect();
+
+        result_elements.extend(up_i);
     }
 
-    // 逐个替换y中元素的值
-    // 重构了
-    // unsafe {
-    //     let y_data_mut = y.data_mut();
-    //     let mut result_data_vec:Vec<f32> = Vec::with_capacity(y.size());
-    //     for r_i in result_data {
-    //         for r_ij in r_i {
-    //             result_data_vec.push(r_ij);
-    //         }
-    //     }
-    //     for i in 0..y.size() {
-    //         y.replace_unchecked(i, result_data_vec[i]);
-    //     }
-    // }
-    unsafe {
-        let y_data_mut = y.data_mut();
-        for i in 0..y.size() {
-            y.replace_unchecked(i, result_elements[i]);
-        }
+    // 更新 y 的数据
+    let y_data_mut = unsafe { y.data_mut() };
+    for (i, val) in result_elements.into_iter().enumerate() {
+        y_data_mut[i] = val;
     }
 }
 
@@ -213,7 +187,40 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    // todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    // Matmul transb function implementations by DeepSeek R1
+    // Check input dimensions
+    assert_eq!(a.shape().len(), 2, "A must be 2D");
+    assert_eq!(b.shape().len(), 2, "B must be 2D");
+    assert_eq!(c.shape().len(), 2, "C must be 2D");
+
+    let a_cols = a.shape()[1];
+    let b_cols = b.shape()[1];
+    assert_eq!(a_cols, b_cols, "A and B columns must match for A@B^T");
+
+    let m = a.shape()[0];
+    let n = b.shape()[0];
+    assert_eq!(c.shape(), &vec![m, n], "C shape must be [A.rows, B.rows]");
+
+    // Get raw data pointers
+    let a_data = a.data();
+    let b_data = b.data();
+    let c_data = unsafe { c.data_mut() };
+
+    // Perform matrix multiplication C = beta*C + alpha*(A @ B^T)
+    for i in 0..m {
+        for j in 0..n {
+            // Compute dot product of A's i-th row and B's j-th row (B^T's j-th column)
+            let mut dot = 0.0;
+            for p in 0..a_cols {
+                dot += a_data[i * a_cols + p] * b_data[j * b_cols + p];
+            }
+
+            // Update C with combined coefficients
+            let idx = i * n + j;
+            c_data[idx] = beta * c_data[idx] + alpha * dot;
+        }
+    }
 }
 
 // Dot product of two tensors (treated as vectors)
@@ -307,8 +314,7 @@ fn test_silu() {
     ));
 }
 
-#[test]
-fn test_rms_norm() {
+#[test]fn test_rms_norm() {
     let mut y = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
     let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
     let w = Tensor::<f32>::new(vec![1., 2.], &vec![2]);

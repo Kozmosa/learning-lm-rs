@@ -156,6 +156,21 @@ fn self_attention(
     todo!("Implement self_attention");
 }
 
+// fn mlp(
+//     residual: &mut Tensor<f32>,
+//     hidden_states: &mut Tensor<f32>,
+//     gate: &mut Tensor<f32>,
+//     up: &mut Tensor<f32>,
+//     w_up: &Tensor<f32>,
+//     w_down: &Tensor<f32>,
+//     w_gate: &Tensor<f32>,
+//     rms_w: &Tensor<f32>,
+//     eps: f32,
+// ) {
+//     todo!("Implement mlp");
+// }
+
+// mlp implemented by r1
 fn mlp(
     residual: &mut Tensor<f32>,
     hidden_states: &mut Tensor<f32>,
@@ -167,7 +182,20 @@ fn mlp(
     rms_w: &Tensor<f32>,
     eps: f32,
 ) {
-    todo!("Implement mlp");
+    // Step 1: RMS normalization
+    OP::rms_norm(hidden_states, residual, rms_w, eps);
+
+    // Step 2: Compute gate = hidden_states @ w_gate^T
+    OP::matmul_transb(gate, 0.0, hidden_states, w_gate, 1.0);
+
+    // Step 3: Compute up = hidden_states @ w_up^T
+    OP::matmul_transb(up, 0.0, hidden_states, w_up, 1.0);
+
+    // Step 4: Apply SwiGLU activation (in-place on up tensor)
+    OP::swiglu(up, gate);
+
+    // Step 5: Compute output = act @ w_down^T and add to residual
+    OP::matmul_transb(residual, 1.0, up, w_down, 1.0);
 }
 
 #[test]
